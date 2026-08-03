@@ -1,0 +1,1179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HoopRef — AI Basketball Referee</title>
+<style>
+  :root{
+    --bg:#0d1015;
+    --panel:#151a22;
+    --panel-2:#1c232d;
+    --line:#2a323f;
+    --text:#e8ecf2;
+    --muted:#8d99ab;
+    --orange:#f5842a;
+    --orange-dim:#a3561a;
+    --red:#ff4d4d;
+    --green:#35d07f;
+    --yellow:#ffc53d;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  }
+  header{
+    display:flex;align-items:center;gap:12px;
+    padding:14px 20px;border-bottom:1px solid var(--line);
+    background:var(--panel);
+  }
+  header h1{font-size:17px;margin:0;letter-spacing:-.2px}
+  header h1 span{color:var(--orange)}
+  .badge{
+    font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+    padding:3px 8px;border-radius:999px;border:1px solid var(--line);
+    color:var(--muted);
+  }
+  #status{margin-left:auto;font-size:12px;color:var(--muted)}
+  #status b{color:var(--text);font-weight:600}
+
+  .wrap{
+    display:grid;grid-template-columns:minmax(0,1fr) 330px;
+    gap:16px;padding:16px;max-width:1400px;margin:0 auto;
+  }
+  @media (max-width:940px){ .wrap{grid-template-columns:1fr} }
+
+  .stage{
+    position:relative;background:#000;border:1px solid var(--line);
+    border-radius:10px;overflow:hidden;aspect-ratio:16/9;
+  }
+  .stage.mirror #video, .stage.mirror #overlay{transform:scaleX(-1)}
+  #video,#overlay{position:absolute;inset:0;width:100%;height:100%}
+  #video{object-fit:contain;background:#000}
+  #overlay{pointer-events:none}
+  .placeholder{
+    position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:10px;
+    color:var(--muted);text-align:center;padding:24px;
+  }
+  .placeholder strong{color:var(--text);font-size:15px}
+
+  .callout{
+    position:absolute;top:14px;left:50%;transform:translateX(-50%);
+    background:rgba(255,77,77,.94);color:#fff;font-weight:700;
+    font-size:22px;letter-spacing:.06em;text-transform:uppercase;
+    padding:10px 22px;border-radius:8px;opacity:0;
+    transition:opacity .18s;pointer-events:none;
+    box-shadow:0 8px 28px rgba(0,0,0,.5);
+  }
+  .callout.show{opacity:1}
+
+  .controls{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  button{
+    font:inherit;font-weight:600;color:var(--text);cursor:pointer;
+    background:var(--panel-2);border:1px solid var(--line);
+    padding:9px 15px;border-radius:7px;
+  }
+  button:hover:not(:disabled){border-color:#3c4859}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:var(--orange);border-color:var(--orange);color:#1a1005}
+  button.primary:hover:not(:disabled){background:#ff9540}
+
+  aside{display:flex;flex-direction:column;gap:14px;min-width:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .card h2{
+    margin:0 0 10px;font-size:11px;text-transform:uppercase;
+    letter-spacing:.09em;color:var(--muted);font-weight:700;
+  }
+
+  .state-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .stat{background:var(--panel-2);border-radius:7px;padding:8px 10px}
+  .stat .k{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+  .stat .v{font-size:15px;font-weight:700;margin-top:2px}
+
+  .rule{display:flex;align-items:flex-start;gap:9px;padding:7px 0;border-bottom:1px solid var(--line)}
+  .rule:last-child{border-bottom:0}
+  .rule input{margin-top:3px;accent-color:var(--orange);width:15px;height:15px}
+  .rule label{flex:1;cursor:pointer}
+  .rule .name{font-weight:600}
+  .rule .note{font-size:11.5px;color:var(--muted);line-height:1.4}
+  .tag{font-size:9.5px;padding:1px 6px;border-radius:999px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;vertical-align:1px;margin-left:5px}
+  .tag.good{background:rgba(53,208,127,.16);color:var(--green)}
+  .tag.mid{background:rgba(255,197,61,.16);color:var(--yellow)}
+  .tag.bad{background:rgba(255,77,77,.16);color:var(--red)}
+
+  .slider{margin:11px 0}
+  .slider .row{display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px}
+  .slider .row span:last-child{color:var(--orange);font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--orange)}
+
+  #log{list-style:none;margin:0;padding:0;max-height:260px;overflow-y:auto}
+  #log li{
+    display:flex;gap:9px;align-items:baseline;
+    padding:7px 0;border-bottom:1px solid var(--line);font-size:13px;
+  }
+  #log li:last-child{border-bottom:0}
+  #log .t{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;min-width:42px}
+  #log .c{font-weight:700}
+  #log .c.dd{color:var(--red)}
+  #log .c.carry{color:var(--orange)}
+  #log .c.travel{color:var(--yellow)}
+  #log .c.contact{color:var(--muted)}
+  .empty{color:var(--muted);font-size:12.5px;font-style:italic}
+
+  .disclaimer{
+    font-size:11.5px;color:var(--muted);line-height:1.5;
+    background:var(--panel-2);border-left:2px solid var(--orange-dim);
+    padding:9px 11px;border-radius:0 6px 6px 0;
+  }
+  .switch{display:flex;align-items:center;gap:8px;font-size:13px;margin-top:8px}
+  .switch input{accent-color:var(--orange);width:15px;height:15px}
+  input[type=file]{display:none}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Hoop<span>Ref</span></h1>
+  <span class="badge">Prototype</span>
+  <div id="status">Models: <b id="modelState">not loaded</b> · <b id="fps">0</b> fps</div>
+</header>
+
+<div class="wrap">
+  <main>
+    <div class="stage" id="stage">
+      <video id="video" playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div class="placeholder" id="placeholder">
+        <strong id="phTitle">Camera is off</strong>
+        <div id="phBody">Start the camera, or load a video clip to test.<br>Everything runs on your device. No video leaves this page.</div>
+      </div>
+      <div class="callout" id="callout"></div>
+    </div>
+
+    <div class="controls">
+      <button class="primary" id="btnStart">Start camera</button>
+      <button id="btnStop" disabled>Stop</button>
+      <button id="btnFile">Load a video clip</button>
+      <input type="file" id="fileInput" accept="video/*">
+      <button id="btnClear">Clear calls</button>
+      <button id="btnFlip">Mirror view</button>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h2>Camera setup matters more than the model</h2>
+      <div class="note" style="font-size:12.5px;color:var(--muted);line-height:1.55">
+        Put the phone or laptop on a tripod or a chair, side-on to the player, roughly waist height,
+        6&ndash;15 feet away, with the whole body and the floor in frame. Bright even light, no backlight.
+        A handheld camera wrecks the step counter, because the referee cannot tell your movement from the player's.
+      </div>
+    </div>
+  </main>
+
+  <aside>
+    <div class="card">
+      <h2>Live read</h2>
+      <div class="state-grid">
+        <div class="stat"><div class="k">Possession</div><div class="v" id="sPoss">&mdash;</div></div>
+        <div class="stat"><div class="k">Ball</div><div class="v" id="sBall">not seen</div></div>
+        <div class="stat"><div class="k">Dribbles</div><div class="v" id="sDribbles">0</div></div>
+        <div class="stat"><div class="k">Steps held</div><div class="v" id="sSteps">0</div></div>
+        <div class="stat"><div class="k">On court</div><div class="v" id="sPeople">0</div></div>
+        <div class="stat"><div class="k">Handler</div><div class="v" id="sHandler">&mdash;</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Rules in play</h2>
+      <div class="rule">
+        <input type="checkbox" id="rDouble" checked>
+        <label for="rDouble">
+          <div class="name">Double dribble<span class="tag good">reliable</span></div>
+          <div class="note">Dribble, gather the ball in your hands, then dribble again.</div>
+        </label>
+      </div>
+      <div class="rule">
+        <input type="checkbox" id="rCarry" checked>
+        <label for="rCarry">
+          <div class="name">Carry / palming<span class="tag mid">rough</span></div>
+          <div class="note">Hand below the ball at the top of the dribble. Catches obvious carries only.</div>
+        </label>
+      </div>
+      <div class="rule">
+        <input type="checkbox" id="rTravel" checked>
+        <label for="rTravel">
+          <div class="name">Traveling<span class="tag mid">rough</span></div>
+          <div class="note">Foot plants counted while the ball is held. Needs a still camera and a clear view of the feet.</div>
+        </label>
+      </div>
+      <div class="rule">
+        <input type="checkbox" id="rContact">
+        <label for="rContact">
+          <div class="name">Possible contact<span class="tag bad">experimental</span></div>
+          <div class="note">Flags moments for you to review. It cannot judge a foul, and it will be wrong often.</div>
+        </label>
+      </div>
+      <div class="switch">
+        <input type="checkbox" id="rWhistle" checked>
+        <label for="rWhistle">Whistle on a call</label>
+      </div>
+      <div class="switch">
+        <input type="checkbox" id="rSkeleton" checked>
+        <label for="rSkeleton">Draw skeleton and ball</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Tuning</h2>
+      <div class="slider">
+        <div class="row"><span>Players on court</span><span id="vPlayers">8</span></div>
+        <input type="range" id="kPlayers" min="2" max="8" step="1" value="8">
+        <div class="note" style="font-size:11px;color:var(--muted);margin-top:4px">
+          Set this to the real number on court. Every extra slot costs frame rate,
+          and 8 is the ceiling.
+        </div>
+      </div>
+      <div class="slider">
+        <div class="row"><span>Bounce sensitivity</span><span id="vBounce">2.0</span></div>
+        <input type="range" id="kBounce" min="0.6" max="5" step="0.1" value="2.0">
+      </div>
+      <div class="slider">
+        <div class="row"><span>Gather hold time</span><span id="vHold">0.35s</span></div>
+        <input type="range" id="kHold" min="0.15" max="1.2" step="0.05" value="0.35">
+      </div>
+      <div class="slider">
+        <div class="row"><span>Steps allowed while held</span><span id="vSteps">2</span></div>
+        <input type="range" id="kSteps" min="1" max="4" step="1" value="2">
+      </div>
+      <div class="slider">
+        <div class="row"><span>Ball confidence</span><span id="vConf">0.30</span></div>
+        <input type="range" id="kConf" min="0.1" max="0.8" step="0.05" value="0.30">
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Call log</h2>
+      <ul id="log"><li class="empty">No calls yet.</li></ul>
+    </div>
+
+    <div class="card">
+      <h2>Read this before you trust it</h2>
+      <div class="disclaimer">
+        This is a computer-vision toy, not an officiating system. It infers rules from a single 2D camera,
+        so it misses violations and invents ones that did not happen. Fouls are not detectable this way at all.
+        Use it for drills and feedback, never to settle an argument in a real game.
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script type="module">
+import { PoseLandmarker, FilesetResolver }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+(function(){
+"use strict";
+
+const $ = id => document.getElementById(id);
+const video = $('video'), canvas = $('overlay'), ctx = canvas.getContext('2d');
+
+let detector = null, ballModel = null, vision = null;
+let running = false, rafId = null, stream = null, swapping = false;
+let frame = 0, lastFpsT = performance.now(), fpsFrames = 0, curFps = 30;
+let lastTs = -1;
+
+/* ---------------------------------------------------------------
+   Pose landmarks
+   MediaPipe returns 33 BlazePose landmarks per person, normalized
+   0-1. We keep the dozen that matter for basketball and convert to
+   pixels, in the same {name,x,y,score} shape the rules already use.
+   Left/right are the player's own left and right.
+----------------------------------------------------------------*/
+const LANDMARKS = {
+  0:'nose',
+  11:'left_shoulder', 12:'right_shoulder',
+  13:'left_elbow',    14:'right_elbow',
+  15:'left_wrist',    16:'right_wrist',
+  23:'left_hip',      24:'right_hip',
+  25:'left_knee',     26:'right_knee',
+  27:'left_ankle',    28:'right_ankle'
+};
+
+function toPoses(result, w, h){
+  const out = [];
+  for (const lms of (result.landmarks || [])){
+    // Some builds leave visibility at 0 on the normalized landmarks.
+    // If the whole person reads as invisible, trust the detection instead.
+    let maxVis = 0;
+    for (const l of lms) if (l.visibility > maxVis) maxVis = l.visibility;
+    const useVis = maxVis > 0.01;
+
+    const keypoints = [];
+    for (const idx in LANDMARKS){
+      const l = lms[idx];
+      if (!l) continue;
+      keypoints.push({
+        name: LANDMARKS[idx],
+        x: l.x * w,
+        y: l.y * h,
+        score: useVis ? l.visibility : 1
+      });
+    }
+    out.push({ id:null, keypoints });
+  }
+  return out;
+}
+
+/* ---------------------------------------------------------------
+   Ball tracking
+   coco-ssd gives us a 'sports ball' box a few times a second. We
+   smooth it, keep a short history, and read vertical velocity off
+   that history. Everything downstream is built on velocity sign
+   flips: down-to-up is a floor bounce, up-to-down is the top of
+   the dribble where the hand touches the ball.
+----------------------------------------------------------------*/
+const ball = {
+  x:0, y:0, r:0, vx:0, vy:0,
+  seen:false, lastSeenT:0, lastRealT:0, lastPosT:0,
+  hist:[], missCount:0
+};
+
+/* Accepts or rejects a detection. When we have a recent lock, a detection
+   far from where the ball could plausibly have moved is a false positive —
+   an orange jersey, a bald head, a second ball on the sideline — and
+   accepting it would teleport the ball and corrupt every velocity read
+   downstream. Returns false when the detection is rejected. */
+function pushBall(x, y, r, t){
+  if (ball.seen && t - ball.lastRealT < 600){
+    // ball.x/y are current as of lastPosT (coasting advances them), so the
+    // prediction must extrapolate from lastPosT — using lastRealT here would
+    // double-count the coasted distance and reject the real ball after a gap.
+    const dt = (t - ball.lastPosT) / 1000;
+    const px = ball.x + ball.vx*dt, py = ball.y + ball.vy*dt;
+    const gate = Math.max(140, Math.hypot(ball.vx, ball.vy)*dt*1.8 + ball.r*6);
+    if (Math.hypot(x - px, y - py) > gate){ ball.missCount++; return false; }
+    // A basketball does not triple in size between frames.
+    if (ball.r > 4 && (r > ball.r*2.6 || r < ball.r*0.35)){ ball.missCount++; return false; }
+  }
+  const a = ball.seen ? 0.55 : 1;          // EMA, snap on reacquire
+  ball.x = ball.x*(1-a) + x*a;
+  ball.y = ball.y*(1-a) + y*a;
+  ball.r = ball.r*(1-a) + r*a;
+  ball.seen = true; ball.lastSeenT = t; ball.lastRealT = t; ball.lastPosT = t;
+  ball.missCount = 0;
+  ball.hist.push({t, x, y});               // raw, so velocity fitting sees true motion
+  if (ball.hist.length > 24) ball.hist.shift();
+  fitVel();
+  return true;
+}
+
+/* Velocity by least-squares over the last ~170ms of raw detections.
+   A two-point difference amplifies one bad detection into a huge phantom
+   velocity; a regression over five points shrugs it off. */
+function fitVel(){
+  const h = ball.hist, n = h.length;
+  if (n < 3){ ball.vx = 0; ball.vy = 0; return; }
+  let pts = [];
+  const newest = h[n-1].t;
+  for (let i = n-1; i >= 0 && pts.length < 8; i--){
+    if (newest - h[i].t <= 170) pts.push(h[i]); else break;
+  }
+  if (pts.length < 3) pts = h.slice(-4);   // sparse after a dropout: use what we have
+  let st=0, sx=0, sy=0, stt=0, stx=0, sty=0;
+  const m = pts.length, t0 = pts[pts.length-1].t;
+  for (const p of pts){
+    const dt = (p.t - t0)/1000;
+    st += dt; sx += p.x; sy += p.y;
+    stt += dt*dt; stx += dt*p.x; sty += dt*p.y;
+  }
+  const denom = m*stt - st*st;
+  if (Math.abs(denom) < 1e-6) return;      // degenerate: keep previous velocity
+  ball.vx = (m*stx - st*sx) / denom;
+  ball.vy = (m*sty - st*sy) / denom;
+}
+
+/* Between detections (COCO-SSD only runs every 2-4 frames, and it misses),
+   coast the ball along its last velocity for up to ~400ms. Handler proximity
+   keeps working through short dropouts instead of the ball freezing in air. */
+function coastBall(t){
+  if (!ball.seen) return;
+  const since = t - ball.lastRealT;
+  if (since <= 34 || since > 420) return;
+  const dt = (t - ball.lastPosT) / 1000;
+  if (dt <= 0) return;
+  ball.x += ball.vx * dt;
+  ball.y += ball.vy * dt;
+  ball.lastPosT = t;
+}
+
+// px/sec, positive = falling (screen y grows downward)
+function ballVY(){ return ball.vy; }
+function ballSpeed(){ return Math.hypot(ball.vx, ball.vy); }
+
+/* ---------------------------------------------------------------
+   Possession state machine
+----------------------------------------------------------------*/
+const S = { NONE:'no ball', LOOSE:'loose', DRIBBLE:'dribbling', HELD:'held' };
+const game = {
+  state: S.NONE,
+  handlerId: null,
+  dribbleCount: 0,        // bounces in the current dribble sequence
+  hadDribbleBeforeHold: false,
+  holdStart: 0,
+  heldSteps: 0,
+  prevVY: 0,
+  armedDown: 0,
+  armedUp: 0,
+  lastBounceT: 0,
+  fallLowY: 0,
+  anchors: null,
+  nearFrames: 0,
+  noHandlerFrames: 0,
+  candidateId: null,
+  candidateFrames: 0,
+  people: 0,
+  cooldown: {},
+  feet: { left:null, right:null }
+};
+
+function resetSequence(reason){
+  game.dribbleCount = 0;
+  game.hadDribbleBeforeHold = false;
+  game.heldSteps = 0;
+  game.feet.left = game.feet.right = null;
+  game.armedDown = game.armedUp = 0;
+  game.fallLowY = 0;
+  game.anchors = null;
+  game.state = reason || S.LOOSE;
+}
+
+function onCooldown(rule, t, ms){
+  if (game.cooldown[rule] && t - game.cooldown[rule] < ms) return true;
+  game.cooldown[rule] = t;
+  return false;
+}
+
+/* ---------------------------------------------------------------
+   Pose helpers
+----------------------------------------------------------------*/
+const MIN_KP = 0.3;
+const SKELETON = [
+  ['left_shoulder','right_shoulder'],['left_shoulder','left_elbow'],['left_elbow','left_wrist'],
+  ['right_shoulder','right_elbow'],['right_elbow','right_wrist'],['left_shoulder','left_hip'],
+  ['right_shoulder','right_hip'],['left_hip','right_hip'],['left_hip','left_knee'],
+  ['left_knee','left_ankle'],['right_hip','right_knee'],['right_knee','right_ankle']
+];
+
+function kp(pose, name){
+  const k = pose.keypoints.find(p => p.name === name);
+  return (k && k.score >= MIN_KP) ? k : null;
+}
+
+// Torso length: our unit of scale, so thresholds work at any distance.
+function scaleUnit(pose){
+  const ls = kp(pose,'left_shoulder'), rs = kp(pose,'right_shoulder');
+  const lh = kp(pose,'left_hip'), rh = kp(pose,'right_hip');
+  if (!ls || !rs || !lh || !rh) return null;
+  const sx = (ls.x+rs.x)/2, sy = (ls.y+rs.y)/2;
+  const hx = (lh.x+rh.x)/2, hy = (lh.y+rh.y)/2;
+  const d = Math.hypot(sx-hx, sy-hy);
+  return d > 20 ? d : null;
+}
+
+/* ---------------------------------------------------------------
+   Identity tracking
+   MediaPipe hands back an unordered list of people with no IDs, and
+   the order changes frame to frame. The rules need identity: telling
+   a pass apart from a double dribble depends entirely on knowing
+   whether the ball changed hands. So we match this frame's people to
+   last frame's by torso centroid, nearest first.
+----------------------------------------------------------------*/
+const tracker = { next:1, tracks:[] };
+
+function centroid(pose){
+  let sx=0, sy=0, n=0;
+  for (const nm of ['left_shoulder','right_shoulder','left_hip','right_hip']){
+    const k = kp(pose, nm);
+    if (k){ sx += k.x; sy += k.y; n++; }
+  }
+  if (!n){                                  // torso hidden, use whatever is visible
+    for (const k of pose.keypoints){
+      if (k.score >= MIN_KP){ sx += k.x; sy += k.y; n++; }
+    }
+  }
+  return n ? { x:sx/n, y:sy/n } : null;
+}
+
+function assignIds(poses){
+  const cents = poses.map(centroid);
+  const taken = new Set();
+
+  // Global nearest-pair matching, closest first, so two players who cross
+  // paths do not steal each other's ID just because of list order.
+  const cands = [];
+  tracker.tracks.forEach((tr, ti) => {
+    cents.forEach((c, pi) => {
+      if (!c) return;
+      const d = Math.hypot(c.x - tr.x, c.y - tr.y);
+      if (d < tr.radius) cands.push({ d, ti, pi });
+    });
+  });
+  cands.sort((a,b) => a.d - b.d);
+
+  const matchedTracks = new Set();
+  for (const c of cands){
+    if (taken.has(c.pi) || matchedTracks.has(c.ti)) continue;
+    const tr = tracker.tracks[c.ti];
+    taken.add(c.pi); matchedTracks.add(c.ti);
+    poses[c.pi].id = tr.id;
+    tr.x = cents[c.pi].x; tr.y = cents[c.pi].y;
+    tr.radius = trackRadius(poses[c.pi]);
+    tr.missed = 0;
+    smoothPose(poses[c.pi], tr);
+  }
+
+  tracker.tracks.forEach((tr, ti) => { if (!matchedTracks.has(ti)) tr.missed++; });
+
+  for (let i = 0; i < poses.length; i++){
+    if (taken.has(i) || !cents[i]) continue;
+    const id = tracker.next++;
+    poses[i].id = id;
+    tracker.tracks.push({ id, x:cents[i].x, y:cents[i].y, radius:trackRadius(poses[i]), missed:0 });
+  }
+
+  // Keep a lost player's slot alive for about half a second, so a brief
+  // occlusion behind another player does not read as a new person.
+  tracker.tracks = tracker.tracks.filter(tr => tr.missed < 15);
+  return poses;
+}
+
+/* Light EMA on each tracked player's keypoints. Identity is what makes this
+   possible: without stable IDs there is no "previous frame" to blend with.
+   Raw landmark jitter on the wrists was the main source of noise in the
+   carry check and the handler-distance test. */
+function smoothPose(pose, tr){
+  const prev = tr.kps || {};
+  const next = {};
+  for (const k of pose.keypoints){
+    if (k.score >= MIN_KP){
+      const p = prev[k.name];
+      if (p){ k.x = p.x*0.4 + k.x*0.6; k.y = p.y*0.4 + k.y*0.6; }
+      next[k.name] = { x:k.x, y:k.y };
+    }
+  }
+  tr.kps = next;
+}
+
+// How far a player may move between frames and still be the same player.
+function trackRadius(pose){
+  const u = scaleUnit(pose);
+  return Math.max(90, (u || 120) * 1.6);
+}
+
+function resetTracker(){ tracker.tracks.length = 0; tracker.next = 1; }
+
+// Whoever has a wrist closest to the ball is holding it.
+function findHandler(poses){
+  if (!ball.seen) return null;
+  let best = null, bestD = Infinity;
+  for (const p of poses){
+    for (const w of ['left_wrist','right_wrist']){
+      const k = kp(p, w);
+      if (!k) continue;
+      const d = Math.hypot(k.x - ball.x, k.y - ball.y);
+      if (d < bestD){ bestD = d; best = { pose:p, dist:d, wrist:k, side:w }; }
+    }
+  }
+  if (!best) return null;
+  const u = scaleUnit(best.pose) || ball.r*4 || 120;
+  return (best.dist < u * 2.6) ? Object.assign(best, {unit:u}) : null;
+}
+
+/* ---------------------------------------------------------------
+   Rule evaluation, once per frame
+----------------------------------------------------------------*/
+function evaluate(poses, t){
+  coastBall(t);
+  const handler = findHandler(poses);
+  const vy = ballVY();
+  const speed = ballSpeed();
+
+  /* Possession change. With eight players packed into a half court the
+     nearest-wrist pick flickers between neighbours, and every flicker
+     would wipe the dribble sequence. So a new handler has to hold the
+     ball for a few consecutive frames before we believe it. */
+  if (handler){
+    if (handler.pose.id !== game.handlerId){
+      if (game.candidateId === handler.pose.id) game.candidateFrames++;
+      else { game.candidateId = handler.pose.id; game.candidateFrames = 1; }
+
+      if (game.candidateFrames >= 4){
+        // A genuine pass or steal. Nothing about the old possession carries over.
+        if (game.handlerId !== null) resetSequence(S.LOOSE);
+        game.handlerId = handler.pose.id;
+        game.candidateId = null; game.candidateFrames = 0;
+      }
+    } else {
+      game.candidateId = null; game.candidateFrames = 0;
+    }
+  }
+
+  /* A held ball is usually half-hidden by the hands, so the detector loses
+     it constantly. Give a held ball a much longer grace window before
+     declaring it gone — wiping possession state on every occlusion was a
+     steady source of missed double dribbles. */
+  const grace = game.state === S.HELD ? 2600 : 1200;
+  if (!ball.seen || t - ball.lastSeenT > grace){
+    game.state = S.NONE;
+    updateReadout(handler, speed);
+    return;
+  }
+
+  const unit = handler ? handler.unit : (ball.r * 4 || 120);
+  const bounceSpeed = parseFloat($('kBounce').value) * unit;   // px/sec
+  const holdMs = parseFloat($('kHold').value) * 1000;
+
+  /* --- Reversal detection.
+         Smoothing spreads a reversal over two or three frames, so the
+         velocity is never still strongly downward on the same frame it
+         reads strongly upward. Instead we ARM on a fast fall and fire
+         when the ball reads upward within a short window. Real footage
+         is noisier than this, so the window matters even more there. --- */
+  const ARM_MS = 260, MIN_GAP = 180;
+  if (vy > bounceSpeed){
+    if (!game.armedDown) game.fallLowY = -Infinity;
+    game.armedDown = t;
+  }
+  // Track the lowest point of the current fall. A genuine dribble bottoms
+  // out below the knees; a jab fake or pump fake reverses at the waist.
+  if (game.armedDown && ball.y > game.fallLowY) game.fallLowY = ball.y;
+  if (vy < -bounceSpeed){
+    if (!game.armedUp){ game.apexY = Infinity; game.apexWristY = null; game.apexDist = Infinity; }
+    game.armedUp = t;
+  }
+
+  // While the ball is on its way up, remember the highest point it reached
+  // and where the hand was AT THAT MOMENT. Comparing them later, after the
+  // ball has already started falling again, reads as a false negative.
+  if (game.armedUp && ball.y < game.apexY){
+    game.apexY = ball.y;
+    game.apexWristY = handler ? handler.wrist.y : null;
+    game.apexDist = handler ? handler.dist : Infinity;
+  }
+
+  const bounced = vy < -bounceSpeed * 0.35 &&
+                  game.armedDown && t - game.armedDown < ARM_MS &&
+                  t - game.lastBounceT > MIN_GAP &&
+                  bounceLowEnough(handler);
+
+  /* --- floor bounce: falling fast, then reverses upward --- */
+  if (bounced){
+    game.armedDown = 0;
+    game.lastBounceT = t;
+    game.dribbleCount++;
+    if (game.state === S.HELD && game.hadDribbleBeforeHold && $('rDouble').checked){
+      if (!onCooldown('double', t, 2500)) call('DOUBLE DRIBBLE', 'dd', t);
+      game.hadDribbleBeforeHold = false;
+    }
+    game.state = S.DRIBBLE;
+    game.heldSteps = 0;
+  }
+
+  /* --- top of the dribble: rising, then reverses downward.
+         If the wrist sits under the ball's center here, the hand
+         was beneath the ball, which is what palming looks like. --- */
+  const atApex = vy > bounceSpeed * 0.35 &&
+                 game.armedUp && t - game.armedUp < ARM_MS;
+  if (atApex && handler && $('rCarry').checked){
+    game.armedUp = 0;
+    // Margin of 0.8 ball radii: wrist jitter alone can fake a few pixels of
+    // "under", but a genuine palming hand sits well below the ball's center.
+    const under = game.apexWristY !== null && game.apexWristY > game.apexY + ball.r * 0.8;
+    const close = game.apexDist < ball.r * 3.2;
+    if (under && close && !onCooldown('carry', t, 2000)) call('CARRY', 'carry', t);
+  }
+
+  /* --- gather: ball slow and pinned to a hand, or in both hands --- */
+  let twoHands = false;
+  if (handler){
+    let n = 0;
+    for (const w of ['left_wrist','right_wrist']){
+      const k = kp(handler.pose, w);
+      if (k && Math.hypot(k.x-ball.x, k.y-ball.y) < ball.r * 3.5) n++;
+    }
+    twoHands = n === 2;
+  }
+  const pinned = handler && handler.dist < ball.r * 2.6 && speed < unit * 0.9;
+
+  if (pinned || twoHands){
+    game.nearFrames++;
+    if (game.state !== S.HELD && (twoHands || game.nearFrames > 3)){
+      if (!game.holdStart) game.holdStart = t;
+      if (t - game.holdStart > holdMs || twoHands){
+        if (game.state === S.DRIBBLE || game.dribbleCount > 0) game.hadDribbleBeforeHold = true;
+        game.state = S.HELD;
+        game.heldSteps = 0;
+        game.feet.left = game.feet.right = null;
+        game.anchors = { left:null, right:null };
+      }
+    }
+  } else {
+    game.nearFrames = 0;
+    game.holdStart = 0;
+  }
+
+  /* --- shot or pass ends the sequence.
+         This has to be measured by DISTANCE, not speed. Pushing the ball
+         back down into a dribble is fast too, and that is exactly the
+         double dribble we are trying to catch. Only a ball that travels
+         away from the handler ends the possession. --- */
+  if (!handler) game.noHandlerFrames++; else game.noHandlerFrames = 0;
+  if (game.state === S.HELD && game.noHandlerFrames > 8){
+    resetSequence(S.LOOSE);
+  }
+
+  /* --- steps while the ball is held --- */
+  if (game.state === S.HELD && handler && $('rTravel').checked){
+    countSteps(handler.pose, handler.unit, t);
+    const allowed = parseInt($('kSteps').value, 10);
+    /* Pivoting is legal: as long as one foot has stayed planted where the
+       ball was gathered, any amount of movement by the other foot is fine.
+       Only when BOTH feet have left their gather spots do excess steps
+       become a travel. */
+    if (game.heldSteps > allowed &&
+        pivotReleased(handler.pose, handler.unit) &&
+        !onCooldown('travel', t, 2500)){
+      call('TRAVEL', 'travel', t);
+      game.heldSteps = 0;
+    }
+  }
+
+  /* --- experimental contact flag --- */
+  if ($('rContact').checked && handler && poses.length > 1){
+    checkContact(poses, handler, t);
+  }
+
+  game.prevVY = vy;
+  updateReadout(handler, speed);
+}
+
+/* A bounce only counts as a dribble if the fall bottomed out low on the
+   handler's body — below the knees when we can see them, below roughly
+   knee height (hip + one torso length) when we cannot. Without this,
+   every jab fake and quick chest-height ball movement rang up phantom
+   dribbles, which then became phantom double dribbles. A loose ball with
+   no handler is exempt: it can legitimately bounce anywhere. */
+function bounceLowEnough(handler){
+  if (!handler) return true;
+  const knee = kp(handler.pose,'left_knee') || kp(handler.pose,'right_knee');
+  const hip  = kp(handler.pose,'left_hip')  || kp(handler.pose,'right_hip');
+  const floorLine = knee ? knee.y : (hip ? hip.y + handler.unit : null);
+  return floorLine === null || game.fallLowY > floorLine;
+}
+
+// A step = a foot travels, then plants. Alternation is not required,
+// because from a side angle one ankle is often occluded.
+function countSteps(pose, unit, t){
+  for (const side of ['left','right']){
+    const a = kp(pose, side + '_ankle');
+    if (!a) continue;
+    const f = game.feet[side];
+    if (!f){
+      game.feet[side] = { x:a.x, y:a.y, moved:false, t };
+      // Where this foot was planted when the ball was gathered. If it never
+      // strays from here, it is a pivot foot and the player is legal.
+      if (game.anchors && !game.anchors[side]) game.anchors[side] = { x:a.x, y:a.y };
+      continue;
+    }
+    const d = Math.hypot(a.x - f.x, a.y - f.y);
+    if (!f.moved && d > unit * 0.42){
+      f.moved = true;
+    } else if (f.moved && d > unit * 0.42){
+      const recent = t - f.t;
+      if (recent > 120){                 // ignore jitter bursts
+        game.heldSteps++;
+        game.feet[side] = { x:a.x, y:a.y, moved:false, t };
+      }
+    }
+  }
+}
+
+// True once no foot remains near its gather position. While any ankle is
+// still planted at its anchor, the player is pivoting, not traveling.
+function pivotReleased(pose, unit){
+  if (!game.anchors) return true;
+  for (const side of ['left','right']){
+    const an = game.anchors[side];
+    const a = kp(pose, side + '_ankle');
+    if (an && a && Math.hypot(a.x - an.x, a.y - an.y) < unit * 0.5) return false;
+  }
+  return true;
+}
+
+function checkContact(poses, handler, t){
+  const hu = handler.unit;
+  const torso = kp(handler.pose,'left_hip') || kp(handler.pose,'right_hip');
+  if (!torso) return;
+  for (const p of poses){
+    if (p.id === handler.pose.id) continue;
+    for (const w of ['left_wrist','right_wrist','left_elbow','right_elbow']){
+      const k = kp(p, w);
+      if (!k) continue;
+      if (Math.hypot(k.x-torso.x, k.y-torso.y) < hu * 0.55){
+        if (!onCooldown('contact', t, 3000)) call('POSSIBLE CONTACT — REVIEW', 'contact', t);
+        return;
+      }
+    }
+  }
+}
+
+/* ---------------------------------------------------------------
+   Output: callout banner, log, whistle
+----------------------------------------------------------------*/
+const callout = $('callout'), logEl = $('log');
+let calloutTimer = null, audioCtx = null;
+
+function call(text, cls, t){
+  callout.textContent = text;
+  callout.classList.add('show');
+  clearTimeout(calloutTimer);
+  calloutTimer = setTimeout(() => callout.classList.remove('show'), 1600);
+
+  const empty = logEl.querySelector('.empty');
+  if (empty) empty.remove();
+  const li = document.createElement('li');
+  const clock = new Date().toLocaleTimeString([], {hour12:false, minute:'2-digit', second:'2-digit'});
+  li.innerHTML = '<span class="t"></span><span class="c ' + cls + '"></span>';
+  li.querySelector('.t').textContent = clock;
+  li.querySelector('.c').textContent = text;
+  logEl.prepend(li);
+  while (logEl.children.length > 60) logEl.lastChild.remove();
+
+  if ($('rWhistle').checked) whistle();
+}
+
+function whistle(){
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const now = audioCtx.currentTime;
+    const gain = audioCtx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.22, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.42);
+    gain.connect(audioCtx.destination);
+    // Two detuned tones plus a warble reads as a whistle.
+    [2450, 3150].forEach(f => {
+      const o = audioCtx.createOscillator();
+      o.type = 'sine'; o.frequency.setValueAtTime(f, now);
+      const lfo = audioCtx.createOscillator(), lg = audioCtx.createGain();
+      lfo.frequency.setValueAtTime(28, now); lg.gain.setValueAtTime(55, now);
+      lfo.connect(lg); lg.connect(o.frequency); lfo.start(now); lfo.stop(now + 0.45);
+      o.connect(gain); o.start(now); o.stop(now + 0.45);
+    });
+  } catch(e){ /* audio blocked until a user gesture; harmless */ }
+}
+
+function updateReadout(handler, speed){
+  $('sPoss').textContent = game.state;
+  $('sBall').textContent = ball.seen ? (handler ? 'in hand' : 'tracked') : 'not seen';
+  $('sDribbles').textContent = game.dribbleCount;
+  $('sSteps').textContent = game.heldSteps;
+  $('sPeople').textContent = game.people;
+  $('sHandler').textContent = game.handlerId ? ('P' + game.handlerId) : '—';
+}
+
+/* ---------------------------------------------------------------
+   Drawing
+----------------------------------------------------------------*/
+function draw(poses){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  if (!$('rSkeleton').checked) return;
+
+  for (const p of poses){
+    const isHandler = game.handlerId !== null && p.id === game.handlerId;
+    ctx.strokeStyle = isHandler ? '#f5842a' : 'rgba(140,160,190,.5)';
+    ctx.lineWidth = isHandler ? 3 : 2;
+    for (const [a,b] of SKELETON){
+      const ka = kp(p,a), kb = kp(p,b);
+      if (!ka || !kb) continue;
+      ctx.beginPath(); ctx.moveTo(ka.x,ka.y); ctx.lineTo(kb.x,kb.y); ctx.stroke();
+    }
+    ctx.fillStyle = isHandler ? '#ffb066' : 'rgba(140,160,190,.55)';
+    for (const k of p.keypoints){
+      if (k.score < MIN_KP) continue;
+      ctx.beginPath(); ctx.arc(k.x, k.y, isHandler ? 4 : 3, 0, Math.PI*2); ctx.fill();
+    }
+
+    // Label each player, otherwise eight overlapping skeletons are unreadable.
+    const head = kp(p,'nose') || kp(p,'left_shoulder') || kp(p,'right_shoulder');
+    if (head && p.id){
+      const tag = 'P' + p.id;
+      ctx.font = '600 14px system-ui,sans-serif';
+      const w = ctx.measureText(tag).width;
+      ctx.fillStyle = isHandler ? 'rgba(245,132,42,.92)' : 'rgba(20,26,34,.72)';
+      ctx.fillRect(head.x - w/2 - 6, head.y - 34, w + 12, 20);
+      ctx.fillStyle = isHandler ? '#1a1005' : '#c3ccda';
+      ctx.textAlign = 'center';
+      ctx.fillText(tag, head.x, head.y - 20);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  if (ball.seen){
+    ctx.strokeStyle = '#35d07f'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(ball.x, ball.y, Math.max(ball.r, 8), 0, Math.PI*2); ctx.stroke();
+    // Trail
+    ctx.strokeStyle = 'rgba(53,208,127,.35)'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ball.hist.forEach((h,i) => i ? ctx.lineTo(h.x,h.y) : ctx.moveTo(h.x,h.y));
+    ctx.stroke();
+  }
+}
+
+/* ---------------------------------------------------------------
+   Model loading and the main loop
+----------------------------------------------------------------*/
+async function loadModels(){
+  if (detector && ballModel) return;
+  $('modelState').textContent = 'loading…';
+  // First load pulls ~15MB of weights and can take 10-20 seconds on a
+  // cold cache, so say so rather than looking frozen.
+  $('phTitle').textContent = 'Loading the referee…';
+  $('phBody').innerHTML = 'Downloading the pose and ball models.<br>First run takes a few seconds. After that they are cached.';
+  await tf.setBackend('webgl');
+  await tf.ready();
+  $('phBody').innerHTML = 'Loading body tracking…';
+  vision = await FilesetResolver.forVisionTasks(
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+  );
+  detector = await makeLandmarker(playerCount());
+  $('phBody').innerHTML = 'Loading ball detection…';
+  ballModel = await cocoSsd.load({ base:'lite_mobilenet_v2' });
+  $('modelState').textContent = 'ready';
+}
+
+function playerCount(){ return parseInt($('kPlayers').value, 10) || 8; }
+
+async function makeLandmarker(numPoses){
+  return await PoseLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/' +
+                      'pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+      delegate: 'GPU'
+    },
+    runningMode: 'VIDEO',
+    numPoses: numPoses,
+    minPoseDetectionConfidence: 0.4,
+    minPosePresenceConfidence: 0.4,
+    minTrackingConfidence: 0.4
+  });
+}
+
+// numPoses is fixed when the model is built, so changing the roster size
+// means building a new one.
+async function swapPlayerCount(){
+  $('vPlayers').textContent = playerCount();
+  if (!detector || swapping) return;
+  swapping = true;
+  $('modelState').textContent = 'resizing roster…';
+  try {
+    const old = detector;
+    detector = await makeLandmarker(playerCount());
+    old.close();
+    resetTracker();
+    game.handlerId = null;
+    $('modelState').textContent = 'ready';
+  } catch(e){
+    $('modelState').textContent = 'error';
+  } finally {
+    swapping = false;
+  }
+}
+
+function resetPlaceholder(){
+  $('phTitle').textContent = 'Camera is off';
+  $('phBody').innerHTML = 'Start the camera, or load a video clip to test.<br>Everything runs on your device. No video leaves this page.';
+}
+
+function sizeCanvas(){
+  if (!video.videoWidth) return;
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+}
+
+async function loop(){
+  if (!running) return;
+  const t = performance.now();
+
+  if (video.readyState >= 2 && video.videoWidth){
+    if (canvas.width !== video.videoWidth) sizeCanvas();
+
+    let poses = [];
+    if (!swapping){
+      try {
+        // VIDEO mode demands strictly increasing timestamps.
+        const ts = Math.max(lastTs + 1, Math.round(t));
+        lastTs = ts;
+        const res = detector.detectForVideo(video, ts);
+        poses = assignIds(toPoses(res, video.videoWidth, video.videoHeight));
+      } catch(e){ /* transient decode error, skip the frame */ }
+    }
+    game.people = poses.length;
+
+    // Ball detection is the expensive call. Eight players already cost us
+    // a lot of frame budget, so back it off further when we are struggling.
+    const every = curFps < 18 ? 4 : (curFps < 26 ? 3 : 2);
+    if (frame % every === 0){
+      try {
+        const preds = await ballModel.detect(video, 10, parseFloat($('kConf').value));
+        const balls = preds.filter(p => p.class === 'sports ball');
+        if (balls.length){
+          const cand = balls.map(b => {
+            const [bx,by,bw,bh] = b.bbox;
+            return { x:bx+bw/2, y:by+bh/2, r:(bw+bh)/4, score:b.score };
+          });
+          // With a lock, the detection nearest to where the ball should be
+          // beats the highest-confidence one — confidence is exactly what a
+          // big orange jersey blob has plenty of. Walk the list until one
+          // passes the physics gate.
+          if (ball.seen) cand.sort((a,b) =>
+            Math.hypot(a.x-ball.x, a.y-ball.y) - Math.hypot(b.x-ball.x, b.y-ball.y));
+          else cand.sort((a,b) => b.score - a.score);
+          for (const c of cand){ if (pushBall(c.x, c.y, c.r, t)) break; }
+        } else {
+          ball.missCount++;
+        }
+        if (ball.missCount > 12) ball.seen = false;
+      } catch(e){ /* skip */ }
+    }
+
+    evaluate(poses, t);
+    draw(poses);
+    frame++;
+  }
+
+  fpsFrames++;
+  if (t - lastFpsT > 500){
+    curFps = fpsFrames * 1000 / (t - lastFpsT);
+    $('fps').textContent = Math.round(curFps);
+    fpsFrames = 0; lastFpsT = t;
+  }
+
+  rafId = requestAnimationFrame(loop);
+}
+
+/* ---------------------------------------------------------------
+   Sources: camera or a local file
+----------------------------------------------------------------*/
+async function startCamera(){
+  $('btnStart').disabled = true;
+  try {
+    await loadModels();
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width:{ideal:1280}, height:{ideal:720}, facingMode:'environment' },
+      audio: false
+    });
+    video.srcObject = stream;
+    video.src = '';
+    await video.play();
+    begin();
+  } catch(err){
+    $('modelState').textContent = 'error';
+    resetPlaceholder();
+    alert(
+      'Could not start the camera.\n\n' + err.name + ': ' + err.message +
+      '\n\nThe camera needs https (or localhost). Opening this file directly ' +
+      'from your hard drive will not work in most browsers.'
+    );
+    $('btnStart').disabled = false;
+  }
+}
+
+async function startFile(file){
+  $('btnFile').disabled = true;
+  try {
+    await loadModels();
+    stopStream();
+    video.srcObject = null;
+    video.src = URL.createObjectURL(file);
+    video.loop = true;
+    await video.play();
+    begin();
+  } catch(err){
+    alert('Could not play that file: ' + err.message);
+  } finally {
+    $('btnFile').disabled = false;
+  }
+}
+
+function begin(){
+  $('placeholder').style.display = 'none';
+  $('btnStop').disabled = false;
+  $('btnStart').disabled = true;
+  running = true;
+  sizeCanvas();
+  loop();
+}
+
+function stopStream(){
+  if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+}
+
+function stopAll(){
+  running = false;
+  if (rafId) cancelAnimationFrame(rafId);
+  stopStream();
+  video.pause(); video.srcObject = null; video.removeAttribute('src'); video.load();
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  resetPlaceholder();
+  $('placeholder').style.display = 'flex';
+  $('btnStop').disabled = true;
+  $('btnStart').disabled = false;
+  ball.seen = false; ball.hist = [];
+  resetTracker();
+  game.handlerId = null; game.candidateId = null; game.candidateFrames = 0;
+  game.people = 0; lastTs = -1;
+  resetSequence(S.NONE);
+  game.state = S.NONE;
+  updateReadout(null, 0);
+}
+
+/* ---------------------------------------------------------------
+   Wiring
+----------------------------------------------------------------*/
+$('btnStart').onclick = startCamera;
+$('btnStop').onclick = stopAll;
+$('btnFile').onclick = () => $('fileInput').click();
+$('fileInput').onchange = e => { if (e.target.files[0]) startFile(e.target.files[0]); };
+$('btnFlip').onclick = () => $('stage').classList.toggle('mirror');
+$('btnClear').onclick = () => { logEl.innerHTML = '<li class="empty">No calls yet.</li>'; };
+
+const bind = (slider, out, fmt) => {
+  const s = $(slider);
+  const render = () => $(out).textContent = fmt(s.value);
+  s.oninput = render; render();
+};
+bind('kPlayers','vPlayers', v => v);
+$('kPlayers').addEventListener('change', swapPlayerCount);
+bind('kBounce','vBounce', v => parseFloat(v).toFixed(1));
+bind('kHold','vHold', v => parseFloat(v).toFixed(2) + 's');
+bind('kSteps','vSteps', v => v);
+bind('kConf','vConf', v => parseFloat(v).toFixed(2));
+
+video.addEventListener('loadedmetadata', sizeCanvas);
+window.addEventListener('beforeunload', stopStream);
+
+// Test hook: lets you drive the rule engine with synthetic ball and pose
+// data instead of a real clip. See test.html.
+window.__hoopref = { pushBall, evaluate, game, ball, S, resetSequence, assignIds, resetTracker, tracker };
+window.dispatchEvent(new Event('hoopref-ready'));
+
+})();
+</script>
+</body>
+</html>

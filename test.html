@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HoopRef — rule engine tests</title>
+<style>
+  body{margin:0;background:#0d1015;color:#e8ecf2;font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+  .pad{padding:20px;max-width:900px}
+  h1{font-size:16px;margin:0 0 4px}
+  p.sub{color:#8d99ab;margin:0 0 18px;font-family:system-ui,sans-serif}
+  iframe{width:1px;height:1px;opacity:0;position:absolute;pointer-events:none}
+  button{font:inherit;font-weight:600;background:#f5842a;color:#1a1005;border:0;padding:9px 16px;border-radius:7px;cursor:pointer}
+  #out{margin-top:18px;white-space:pre-wrap}
+  .pass{color:#35d07f}
+  .fail{color:#ff4d4d}
+  .info{color:#8d99ab}
+  .sum{margin-top:14px;padding-top:12px;border-top:1px solid #2a323f;font-weight:700}
+</style>
+</head>
+<body>
+<div class="pad">
+  <h1>HoopRef rule engine tests</h1>
+  <p class="sub">Drives the referee with synthetic ball and pose data, so the rules can be checked without a real clip and a real basketball.</p>
+  <button id="run">Run tests</button>
+  <div id="out"></div>
+</div>
+<iframe id="app" src="index.html"></iframe>
+
+<script>
+const out = document.getElementById('out');
+const line = (cls, msg) => {
+  const d = document.createElement('div');
+  d.className = cls; d.textContent = msg; out.appendChild(d);
+};
+
+/* Synthetic actor: a player standing still, torso length 120px.
+   Thresholds in the engine scale off torso length, so this fixes the units. */
+const UNIT = 120;
+function pose(opts){
+  const o = Object.assign({ wristR:[400,350], wristL:[240,350], ankleL:[300,560], ankleR:[360,560], dx:0 }, opts);
+  const k = (name,x,y) => ({name, x:x + o.dx, y, score:0.9});
+  return {
+    id: o.id || 1,
+    keypoints: [
+      k('nose',340,150),
+      k('left_shoulder',300,200), k('right_shoulder',380,200),
+      k('left_hip',310,320),      k('right_hip',370,320),
+      k('left_wrist',o.wristL[0]-o.dx,o.wristL[1]), k('right_wrist',o.wristR[0]-o.dx,o.wristR[1]),
+      k('left_ankle',o.ankleL[0],o.ankleL[1]), k('right_ankle',o.ankleR[0],o.ankleR[1])
+    ]
+  };
+}
+
+// A row of players spread across the court, ids stripped for the tracker.
+function squad(n, t){
+  const out = [];
+  for (let i=0;i<n;i++){
+    const dx = i*170 + (t||0);
+    const p = pose({ dx, wristR:[400+dx,350], wristL:[240+dx,350] });
+    p.id = null;
+    out.push(p);
+  }
+  return out;
+}
+
+const HAND_Y = 350, FLOOR_Y = 600, BALL_X = 420, BALL_R = 15, DT = 33;
+
+async function run(){
+  out.innerHTML = '';
+  const win = document.getElementById('app').contentWindow;
+  const H = win.__hoopref;
+  if (!H){ line('fail', 'Test hook missing. Is index.html loaded?'); return; }
+
+  const doc = win.document;
+  doc.getElementById('rWhistle').checked = false;   // silence during tests
+  let t = 1000;
+  const calls = () => Array.from(doc.querySelectorAll('#log .c')).map(e => e.textContent);
+
+  function reset(){
+    doc.getElementById('log').innerHTML = '<li class="empty">No calls yet.</li>';
+    H.ball.hist.length = 0; H.ball.seen = false;
+    H.ball.vx = 0; H.ball.vy = 0;
+    H.ball.lastRealT = 0; H.ball.lastPosT = 0; H.ball.missCount = 0;
+    H.resetSequence(H.S.NONE);
+    Object.keys(H.game.cooldown).forEach(k => delete H.game.cooldown[k]);
+    H.game.prevVY = 0; H.game.dribbleCount = 0; H.game.handlerId = null;
+    H.game.noHandlerFrames = 0; H.game.nearFrames = 0; H.game.holdStart = 0;
+    H.game.candidateId = null; H.game.candidateFrames = 0;
+    H.resetTracker();
+    t += 6000;   // jump past every cooldown window
+  }
+
+  // One dribble: ball falls hand -> floor, then rises floor -> hand.
+  function dribble(p, frames){
+    frames = frames || 9;
+    for (let i=0;i<frames;i++){
+      const y = HAND_Y + (FLOOR_Y-HAND_Y) * (i/(frames-1));
+      H.pushBall(BALL_X, y, BALL_R, t); H.evaluate([p], t); t += DT;
+    }
+    for (let i=0;i<frames;i++){
+      const y = FLOOR_Y - (FLOOR_Y-HAND_Y) * (i/(frames-1));
+      H.pushBall(BALL_X, y, BALL_R, t); H.evaluate([p], t); t += DT;
+    }
+  }
+
+  // Ball pinned in both hands at chest height.
+  function gather(p, frames){
+    const g = p || pose({ wristR:[BALL_X+6, HAND_Y+4], wristL:[BALL_X-6, HAND_Y+4] });
+    for (let i=0;i<(frames||20);i++){
+      H.pushBall(BALL_X, HAND_Y, BALL_R, t); H.evaluate([g], t); t += DT;
+    }
+    return g;
+  }
+
+  const results = [];
+  const check = (name, cond, detail) => {
+    results.push(cond);
+    line(cond ? 'pass' : 'fail', (cond ? 'PASS  ' : 'FAIL  ') + name + (detail ? '   [' + detail + ']' : ''));
+  };
+
+  /* 1. A plain continuous dribble must not be called for anything. */
+  reset();
+  const p1 = pose({});
+  for (let i=0;i<4;i++) dribble(p1);
+  check('continuous dribble stays clean', calls().length === 0, calls().join(', ') || 'no calls');
+
+  /* 2. Bounces are actually being counted. */
+  check('bounces counted', H.game.dribbleCount >= 3, 'count=' + H.game.dribbleCount);
+
+  /* 3. Dribble, gather into both hands, dribble again = double dribble. */
+  reset();
+  const p3 = pose({});
+  dribble(p3); dribble(p3);
+  const held = gather(null, 20);
+  const wasHeld = H.game.state === H.S.HELD;
+  dribble(p3);
+  check('gather registers as held', wasHeld, 'state was ' + (wasHeld ? 'held' : H.game.state));
+  check('double dribble called', calls().some(c => c.includes('DOUBLE DRIBBLE')), calls().join(', ') || 'no calls');
+
+  /* 4. Gather and then shoot (ball leaves the handler) is legal. */
+  reset();
+  const p4 = pose({});
+  dribble(p4); gather(null, 20);
+  for (let i=0;i<30;i++){                       // ball flies away toward the rim
+    H.pushBall(BALL_X + i*22, HAND_Y - i*10, BALL_R, t); H.evaluate([p4], t); t += DT;
+  }
+  check('shot after gather is legal', !calls().some(c => c.includes('DOUBLE DRIBBLE')), calls().join(', ') || 'no calls');
+
+  /* 5. Walking with the ball held = travel. */
+  reset();
+  doc.getElementById('kSteps').value = 2;
+  let g5 = gather(null, 12);
+  let footL = 300, footR = 360;
+  for (let step=0; step<8; step++){             // alternate big strides
+    footL += 70; footR += 70;
+    for (let i=0;i<5;i++){
+      const p = pose({ wristR:[BALL_X+6,HAND_Y+4], wristL:[BALL_X-6,HAND_Y+4],
+                       ankleL:[footL,560], ankleR:[footR,560] });
+      H.pushBall(BALL_X, HAND_Y, BALL_R, t); H.evaluate([p], t); t += DT;
+    }
+  }
+  check('travel called while holding', calls().some(c => c.includes('TRAVEL')), calls().join(', ') || 'no calls');
+
+  /* 6. Standing still while holding is not a travel. */
+  reset();
+  gather(null, 90);
+  check('standing with the ball is legal', !calls().some(c => c.includes('TRAVEL')), calls().join(', ') || 'no calls');
+
+  /* 7. Hand under the ball at the top of the dribble = carry. */
+  reset();
+  const pCarry = pose({ wristR:[BALL_X+4, HAND_Y+40] });   // wrist BELOW the ball
+  for (let i=0;i<9;i++){                                    // ball rising to the hand
+    const y = FLOOR_Y - (FLOOR_Y-HAND_Y)*(i/8);
+    H.pushBall(BALL_X, y, BALL_R, t); H.evaluate([pCarry], t); t += DT;
+  }
+  for (let i=0;i<6;i++){                                    // then pushed back down
+    H.pushBall(BALL_X, HAND_Y + i*28, BALL_R, t); H.evaluate([pCarry], t); t += DT;
+  }
+  check('carry called when the hand is under the ball', calls().some(c => c.includes('CARRY')), calls().join(', ') || 'no calls');
+
+  /* 8. Tracker: eight people get eight stable IDs across moving frames. */
+  reset();
+  let ids0 = H.assignIds(squad(8, 0)).map(p => p.id);
+  let stable = true;
+  for (let f=1; f<=20; f++){
+    const ids = H.assignIds(squad(8, f*12)).map(p => p.id);   // everyone drifts right
+    if (ids.join(',') !== ids0.join(',')) stable = false;
+  }
+  check('8 players tracked with stable ids', new Set(ids0).size === 8 && stable,
+        'ids=' + ids0.join(','));
+
+  /* 9. Tracker: a brief occlusion does not mint a new person. */
+  reset();
+  const before = H.assignIds(squad(8, 0)).map(p => p.id);
+  for (let f=0; f<8; f++){                        // player 3 vanishes for 8 frames
+    const s = squad(8, 0); s.splice(3,1); H.assignIds(s);
+  }
+  const after = H.assignIds(squad(8, 0)).map(p => p.id);
+  check('brief occlusion keeps identity', after.join(',') === before.join(','),
+        before.join(',') + ' -> ' + after.join(','));
+
+  /* 10. A dribble, a PASS to a teammate, then their dribble: legal.
+         Same ball behavior as a double dribble, different hands. */
+  reset();
+  const passer = pose({}); passer.id = null;
+  const receiver = pose({ dx: 600, wristR:[1020,350], wristL:[860,350] }); receiver.id = null;
+  const both = () => {
+    const a = pose({}); a.id = null;
+    const b = pose({ dx: 600, wristR:[1020,350], wristL:[860,350] }); b.id = null;
+    return H.assignIds([a,b]);
+  };
+  // passer dribbles then gathers
+  for (let rep=0;rep<2;rep++){
+    for (let i=0;i<9;i++){ const y=HAND_Y+(FLOOR_Y-HAND_Y)*(i/8); H.pushBall(BALL_X,y,BALL_R,t); H.evaluate(both(),t); t+=DT; }
+    for (let i=0;i<9;i++){ const y=FLOOR_Y-(FLOOR_Y-HAND_Y)*(i/8); H.pushBall(BALL_X,y,BALL_R,t); H.evaluate(both(),t); t+=DT; }
+  }
+  for (let i=0;i<20;i++){ H.pushBall(BALL_X,HAND_Y,BALL_R,t); H.evaluate(both(),t); t+=DT; }
+  // ball flies across to the receiver
+  for (let i=0;i<14;i++){ H.pushBall(BALL_X + (1020-BALL_X)*(i/13), HAND_Y-40, BALL_R, t); H.evaluate(both(),t); t+=DT; }
+  // receiver holds it a moment, then starts their dribble
+  for (let i=0;i<12;i++){ H.pushBall(1020,HAND_Y,BALL_R,t); H.evaluate(both(),t); t+=DT; }
+  for (let i=0;i<9;i++){ const y=HAND_Y+(FLOOR_Y-HAND_Y)*(i/8); H.pushBall(1020,y,BALL_R,t); H.evaluate(both(),t); t+=DT; }
+  for (let i=0;i<9;i++){ const y=FLOOR_Y-(FLOOR_Y-HAND_Y)*(i/8); H.pushBall(1020,y,BALL_R,t); H.evaluate(both(),t); t+=DT; }
+  check('pass then new dribble is legal', !calls().some(c => c.includes('DOUBLE DRIBBLE')),
+        calls().join(', ') || 'no calls');
+
+  /* 11. STRESS: a jab fake — ball dips to the waist and snaps back — is
+         not a dribble. Without the knee-height gate this rang up phantom
+         bounces that became phantom double dribbles. */
+  reset();
+  const p11 = pose({});
+  for (let rep=0; rep<3; rep++){
+    for (let i=0;i<5;i++){ H.pushBall(BALL_X, 350 + 55*(i/4), BALL_R, t); H.evaluate([p11], t); t+=DT; }
+    for (let i=0;i<5;i++){ H.pushBall(BALL_X, 405 - 55*(i/4), BALL_R, t); H.evaluate([p11], t); t+=DT; }
+  }
+  check('waist-high fake is not a dribble', H.game.dribbleCount === 0 && calls().length === 0,
+        'count=' + H.game.dribbleCount + (calls().length ? ', ' + calls().join(', ') : ''));
+
+  /* 12. STRESS: everything jitters. Noisy ball detections and noisy
+         keypoints across four dribble cycles must produce zero calls. */
+  reset();
+  let seed = 42;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - 0.5; };
+  const noisyPose = () => {
+    const p = pose({});
+    for (const k of p.keypoints){ k.x += rnd()*8; k.y += rnd()*8; }
+    return p;
+  };
+  for (let rep=0; rep<4; rep++){
+    for (let i=0;i<9;i++){ const y=HAND_Y+(FLOOR_Y-HAND_Y)*(i/8); H.pushBall(BALL_X+rnd()*10, y+rnd()*10, BALL_R, t); H.evaluate([noisyPose()], t); t+=DT; }
+    for (let i=0;i<9;i++){ const y=FLOOR_Y-(FLOOR_Y-HAND_Y)*(i/8); H.pushBall(BALL_X+rnd()*10, y+rnd()*10, BALL_R, t); H.evaluate([noisyPose()], t); t+=DT; }
+  }
+  check('noisy dribble produces no phantom calls', calls().length === 0,
+        calls().join(', ') || 'no calls');
+
+  /* 13. STRESS: a false detection across the court (jersey, second ball on
+         the sideline) must be rejected by the physics gate, not teleport
+         the tracked ball. */
+  reset();
+  const p13 = pose({});
+  dribble(p13);
+  for (let i=0;i<4;i++){ const y=HAND_Y+(FLOOR_Y-HAND_Y)*(i/8); H.pushBall(BALL_X, y, BALL_R, t); H.evaluate([p13], t); t+=DT; }
+  const rejected = !H.pushBall(1600, 120, BALL_R, t+1);       // bogus blob far away
+  const stayedPut = Math.abs(H.ball.x - BALL_X) < 120;
+  for (let i=4;i<9;i++){ const y=HAND_Y+(FLOOR_Y-HAND_Y)*(i/8); H.pushBall(BALL_X, y, BALL_R, t); H.evaluate([p13], t); t+=DT; }
+  for (let i=0;i<9;i++){ const y=FLOOR_Y-(FLOOR_Y-HAND_Y)*(i/8); H.pushBall(BALL_X, y, BALL_R, t); H.evaluate([p13], t); t+=DT; }
+  check('teleporting false detection is rejected', rejected && stayedPut && H.game.dribbleCount >= 2,
+        'rejected=' + rejected + ' x=' + Math.round(H.ball.x) + ' count=' + H.game.dribbleCount);
+
+  /* 14. STRESS: the detector loses the ball for a few frames mid-fall
+         (motion blur does this constantly). Coasting should carry the
+         sequence through and the bounce should still be counted. */
+  reset();
+  const p14 = pose({});
+  for (let rep=0; rep<3; rep++){
+    for (let i=0;i<9;i++){
+      const y = HAND_Y + (FLOOR_Y-HAND_Y)*(i/8);
+      if (i < 3 || i > 5) H.pushBall(BALL_X, y, BALL_R, t);   // frames 3-5: no detection
+      H.evaluate([p14], t); t+=DT;
+    }
+    for (let i=0;i<9;i++){ const y=FLOOR_Y-(FLOOR_Y-HAND_Y)*(i/8); H.pushBall(BALL_X, y, BALL_R, t); H.evaluate([p14], t); t+=DT; }
+  }
+  check('dropout mid-fall still counts bounces', H.game.dribbleCount >= 2 && calls().length === 0,
+        'count=' + H.game.dribbleCount + (calls().length ? ', ' + calls().join(', ') : ''));
+
+  /* 15. STRESS: pivoting is legal. One foot planted, the other swinging
+         all over — no travel. Once the pivot foot also leaves its spot,
+         the accumulated steps become a travel. */
+  reset();
+  gather(null, 12);
+  const pivotPose = (ar) => pose({ wristR:[BALL_X+6,HAND_Y+4], wristL:[BALL_X-6,HAND_Y+4],
+                                   ankleL:[300,560], ankleR:[ar,560] });
+  for (let sw=0; sw<6; sw++){
+    const ar = sw % 2 ? 360 : 450;
+    for (let i=0;i<4;i++){ H.pushBall(BALL_X,HAND_Y,BALL_R,t); H.evaluate([pivotPose(ar)],t); t+=DT; }
+  }
+  const noTravelWhilePivoting = !calls().some(c => c.includes('TRAVEL'));
+  const stepsBanked = H.game.heldSteps > 2;
+  // now the pivot foot moves too
+  const walkPose = pose({ wristR:[BALL_X+6,HAND_Y+4], wristL:[BALL_X-6,HAND_Y+4],
+                          ankleL:[390,560], ankleR:[450,560] });
+  for (let i=0;i<4;i++){ H.pushBall(BALL_X,HAND_Y,BALL_R,t); H.evaluate([walkPose],t); t+=DT; }
+  check('pivoting on one foot is legal', noTravelWhilePivoting && stepsBanked,
+        'steps=' + (stepsBanked ? '>2' : H.game.heldSteps));
+  check('lifting the pivot foot converts to travel', calls().some(c => c.includes('TRAVEL')),
+        calls().join(', ') || 'no calls');
+
+  /* 16. STRESS: with two players adjacent, the nearest-wrist pick flickers
+         every frame. The debounce must hold possession on the original
+         handler rather than bouncing between them. */
+  reset();
+  const pa = pose({}); pa.id = 1;
+  const pb = pose({ dx:340, wristR:[740,350], wristL:[580,350] }); pb.id = 2;
+  for (let i=0;i<10;i++){ H.pushBall(420,350,BALL_R,t); H.evaluate([pa,pb],t); t+=DT; }
+  const established = H.game.handlerId;
+  for (let i=0;i<12;i++){
+    H.pushBall(i % 2 ? 480 : 510, 350, BALL_R, t);            // alternately nearer A then B
+    H.evaluate([pa,pb],t); t+=DT;
+  }
+  check('handler debounce survives proximity flicker',
+        established === 1 && H.game.handlerId === 1,
+        'established=P' + established + ' now=P' + H.game.handlerId);
+
+  /* 17. Rules respect their checkboxes. */
+  reset();
+  doc.getElementById('rDouble').checked = false;
+  const p8 = pose({});
+  dribble(p8); dribble(p8); gather(null, 20); dribble(p8);
+  check('disabling a rule silences it', !calls().some(c => c.includes('DOUBLE DRIBBLE')), calls().join(', ') || 'no calls');
+  doc.getElementById('rDouble').checked = true;
+
+  const passed = results.filter(Boolean).length;
+  const d = document.createElement('div');
+  d.className = 'sum ' + (passed === results.length ? 'pass' : 'fail');
+  d.textContent = passed + ' / ' + results.length + ' passed';
+  out.appendChild(d);
+}
+
+document.getElementById('run').onclick = run;
+</script>
+</body>
+</html>
