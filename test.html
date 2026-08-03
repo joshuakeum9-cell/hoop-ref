@@ -305,6 +305,52 @@ async function run(){
   check('lifting the pivot foot converts to travel', calls().some(c => c.includes('TRAVEL')),
         calls().join(', ') || 'no calls');
 
+  /* 15b. STRESS: two players cross paths at speed. Identity must follow
+         each player through the cross — the pose moving right keeps its id
+         all the way to the far side. List order alternates every frame so
+         ordering can never be what saves us. */
+  reset();
+  const mkCross = (f, withB) => {
+    const a = pose({ dx: 24*f });            a.id = null;                 // centroid 340+24f, y 260
+    const out = [a];
+    if (withB){
+      const b = pose({ dx: 640 - 24*f });    b.id = null;                 // centroid 980-24f
+      for (const k of b.keypoints) k.y += 30;                            // slight depth offset
+      out.push(b);
+    }
+    return (f % 2) ? out.reverse() : out;
+  };
+  let crossA = null, crossB = null, crossOk = true;
+  for (let f=0; f<=30; f++){
+    const ps = H.assignIds(mkCross(f, true));
+    const aP = ps.find(p => Math.abs((p.keypoints[1].y) - 200) < 15);     // A's shoulder y=200
+    const bP = ps.find(p => p !== aP);
+    if (f === 0){ crossA = aP.id; crossB = bP.id; }
+    else if (aP.id !== crossA || bP.id !== crossB){ crossOk = false; break; }
+  }
+  check('identities survive a crossing', crossOk && crossA !== crossB,
+        'A=P' + crossA + ' B=P' + crossB);
+
+  /* 15c. STRESS: the brutal version — a player is fully occluded AT the
+         crossing point and reappears on the far side of the player who
+         screened them. Coasted momentum has to carry their identity
+         through the blackout. */
+  reset();
+  let hardA = null, hardB = null, hardOk = true, sawB = false;
+  for (let f=0; f<=30; f++){
+    const withB = f < 11 || f > 16;                                       // B hidden frames 11-16
+    const ps = H.assignIds(mkCross(f, withB));
+    const aP = ps.find(p => Math.abs((p.keypoints[1].y) - 200) < 15);
+    const bP = ps.find(p => p !== aP);
+    if (f === 0){ hardA = aP.id; hardB = bP.id; }
+    else {
+      if (aP.id !== hardA){ hardOk = false; break; }
+      if (bP){ sawB = true; if (bP.id !== hardB){ hardOk = false; break; } }
+    }
+  }
+  check('occlusion at the crossing point keeps identity', hardOk && sawB && hardA !== hardB,
+        'A=P' + hardA + ' B=P' + hardB);
+
   /* 16. STRESS: with two players adjacent, the nearest-wrist pick flickers
          every frame. The debounce must hold possession on the original
          handler rather than bouncing between them. */

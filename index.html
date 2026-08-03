@@ -307,6 +307,13 @@ const LANDMARKS = {
 function toPoses(result, w, h){
   const out = [];
   for (const lms of (result.landmarks || [])){
+    /* Size gate: with detection confidence at 0.15, the model also picks up
+       spectators and passers-by in the background. A real player on this
+       court has a torso of at least ~4% of frame height (measured: in-game
+       players run 4-18%); tiny figures are someone else's game. */
+    const sxN = (lms[11].x + lms[12].x)/2, syN = (lms[11].y + lms[12].y)/2;
+    const hxN = (lms[23].x + lms[24].x)/2, hyN = (lms[23].y + lms[24].y)/2;
+    if (Math.hypot((sxN-hxN)*w, (syN-hyN)*h) / h < 0.04) continue;
     // Some builds leave visibility at 0 on the normalized landmarks.
     // If the whole person reads as invisible, trust the detection instead.
     let maxVis = 0;
@@ -513,14 +520,22 @@ function assignIds(poses){
   const cents = poses.map(centroid);
   const taken = new Set();
 
-  // Global nearest-pair matching, closest first, so two players who cross
-  // paths do not steal each other's ID just because of list order.
+  /* Match against each track's PREDICTED position (last position plus
+     learned per-frame velocity), not its last position. For two players
+     crossing paths, distance-to-last-position degrades to a near-tie at
+     the crossing point; distance-to-prediction stays decisive because
+     each player keeps their own momentum through the cross.
+     Global nearest-pair first, so list order never decides identity. */
   const cands = [];
   tracker.tracks.forEach((tr, ti) => {
+    const px = tr.x + tr.vx, py = tr.y + tr.vy;
+    // A track that has been missing keeps searching a wider area: position
+    // uncertainty grows the longer the player is hidden.
+    const gate = tr.radius * Math.min(1 + tr.missed * 0.35, 2.5);
     cents.forEach((c, pi) => {
       if (!c) return;
-      const d = Math.hypot(c.x - tr.x, c.y - tr.y);
-      if (d < tr.radius) cands.push({ d, ti, pi });
+      const d = Math.hypot(c.x - px, c.y - py);
+      if (d < gate) cands.push({ d, ti, pi });
     });
   });
   cands.sort((a,b) => a.d - b.d);
@@ -531,19 +546,33 @@ function assignIds(poses){
     const tr = tracker.tracks[c.ti];
     taken.add(c.pi); matchedTracks.add(c.ti);
     poses[c.pi].id = tr.id;
+    // Coasting keeps tr.x one frame behind, so this delta spans one frame
+    // even after an occlusion gap.
+    tr.vx = tr.vx*0.5 + (cents[c.pi].x - tr.x)*0.5;
+    tr.vy = tr.vy*0.5 + (cents[c.pi].y - tr.y)*0.5;
     tr.x = cents[c.pi].x; tr.y = cents[c.pi].y;
     tr.radius = trackRadius(poses[c.pi]);
     tr.missed = 0;
     smoothPose(poses[c.pi], tr);
   }
 
-  tracker.tracks.forEach((tr, ti) => { if (!matchedTracks.has(ti)) tr.missed++; });
+  /* Unmatched tracks coast along their momentum, damped so a player who
+     vanished at a sprint is not extrapolated across the whole court. This
+     is what lets someone reappear on the FAR side of the player who
+     screened them and still be recognized. */
+  tracker.tracks.forEach((tr, ti) => {
+    if (matchedTracks.has(ti)) return;
+    tr.missed++;
+    tr.x += tr.vx; tr.y += tr.vy;
+    tr.vx *= 0.85; tr.vy *= 0.85;
+  });
 
   for (let i = 0; i < poses.length; i++){
     if (taken.has(i) || !cents[i]) continue;
     const id = tracker.next++;
     poses[i].id = id;
-    tracker.tracks.push({ id, x:cents[i].x, y:cents[i].y, radius:trackRadius(poses[i]), missed:0 });
+    tracker.tracks.push({ id, x:cents[i].x, y:cents[i].y, vx:0, vy:0,
+                          radius:trackRadius(poses[i]), missed:0 });
   }
 
   // Keep a lost player's slot alive for about half a second, so a brief
@@ -968,9 +997,14 @@ async function makeLandmarker(numPoses){
     },
     runningMode: 'VIDEO',
     numPoses: numPoses,
-    minPoseDetectionConfidence: 0.4,
-    minPosePresenceConfidence: 0.4,
-    minTrackingConfidence: 0.4
+    /* 0.15, not the usual 0.4. Verified against real in-game photos: at 0.4
+       the detector finds ONE person in a frame with ten players, because
+       small, blurred, overlapping game bodies all score low at the detection
+       stage. At 0.15 it finds 4-6. The junk this lets in (tiny background
+       figures) is removed by the size gate in toPoses instead. */
+    minPoseDetectionConfidence: 0.15,
+    minPosePresenceConfidence: 0.15,
+    minTrackingConfidence: 0.3
   });
 }
 
@@ -1170,7 +1204,7 @@ window.addEventListener('beforeunload', stopStream);
 
 // Test hook: lets you drive the rule engine with synthetic ball and pose
 // data instead of a real clip. See test.html.
-window.__hoopref = { pushBall, evaluate, game, ball, S, resetSequence, assignIds, resetTracker, tracker };
+window.__hoopref = { pushBall, evaluate, game, ball, S, resetSequence, assignIds, resetTracker, tracker, toPoses };
 window.dispatchEvent(new Event('hoopref-ready'));
 
 })();

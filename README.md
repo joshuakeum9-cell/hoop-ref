@@ -85,10 +85,18 @@ gets its false-positive rate down with six mechanisms, each covered by stress te
 ## Tests
 
 Open `test.html` (same folder, same server) and hit **Run tests**. It drives the rule
-engine with synthetic ball and pose data — 19 checks covering the rules, the identity
+engine with synthetic ball and pose data — 21 checks covering the rules, the identity
 tracker, and adversarial scenarios: jitter on every input, false detections across the
-court, detector dropouts mid-fall, pivot moves, and handler flicker between adjacent
-players.
+court, detector dropouts mid-fall, pivot moves, handler flicker between adjacent
+players, players crossing paths at speed, and a player fully occluded at the crossing
+point who reappears on the far side.
+
+Multi-person detection is tuned against real in-game photos, not just synthetic data:
+at MediaPipe's default detection confidence (0.4), a real game frame with ten players
+yielded ONE detected person — game bodies are small, blurred, and overlapping, and they
+all score low. At 0.15 the same frames yield 4-6. The junk that low threshold lets in
+(spectators, tiny background figures) is removed by a size gate: a pose whose torso is
+under ~4% of frame height is not on this court.
 
 ## The honest limits
 
@@ -111,9 +119,12 @@ Use it for drills and self-review. Do not use it to settle an argument in a real
 - [MediaPipe Pose Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker)
   (`tasks-vision`, GPU delegate) — 33 body landmarks per person, up to 8 people.
 - A small custom tracker on top of it. MediaPipe returns people as an unordered,
-  unlabeled list, so the app matches each frame's bodies to the previous frame's by
-  torso position to keep stable player IDs (`P1`–`P8`). Identity is what lets the rules
-  tell a pass (legal) from picking up your own dribble and starting again (double dribble).
+  unlabeled list, so the app matches each frame's bodies to the previous frame's — by
+  *predicted* position (last position plus learned per-frame velocity), which is what
+  keeps identities straight when two players cross paths. A hidden player's track coasts
+  along their momentum with a growing search radius, so someone screened off mid-cross is
+  recognized when they reappear on the far side. Identity is what lets the rules tell a
+  pass (legal) from picking up your own dribble and starting again (double dribble).
 - [COCO-SSD](https://github.com/tensorflow/tfjs-models/tree/master/coco-ssd) —
   the `sports ball` class, for ball position, on TensorFlow.js / WebGL.
 
