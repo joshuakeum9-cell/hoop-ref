@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HoopRef test suite</title>
+<style>
+  :root{
+    --bg:#0b0e13; --panel:#141922; --panel-2:#1b222d; --line:#28313f;
+    --text:#e9edf3; --muted:#8b97a9; --orange:#f5842a;
+    --green:#35d07f; --red:#ff5252; --blue:#5ac8ff; --yellow:#ffc53d;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:13.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  header{
+    padding:16px 20px; border-bottom:1px solid var(--line); background:var(--panel);
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    position:sticky; top:0; z-index:5;
+  }
+  h1{margin:0; font-size:16px; font-family:system-ui,sans-serif}
+  h1 span{color:var(--orange)}
+  .sub{color:var(--muted); font-family:system-ui,sans-serif; font-size:12.5px}
+  button{
+    font:inherit; font-weight:700; background:var(--orange); color:#1a1005;
+    border:0; padding:9px 16px; border-radius:7px; cursor:pointer;
+  }
+  button.ghost{background:var(--panel-2); color:var(--text); border:1px solid var(--line)}
+  button:disabled{opacity:.5; cursor:not-allowed}
+  #tally{margin-left:auto; font-family:system-ui,sans-serif; font-size:13px}
+  #tally b{font-size:16px}
+  .pad{padding:18px 20px; max-width:1100px}
+  .suite{margin-bottom:18px; border:1px solid var(--line); border-radius:9px; overflow:hidden}
+  .suite > h2{
+    margin:0; padding:9px 13px; background:var(--panel); font-size:13px;
+    display:flex; gap:10px; align-items:center; font-family:system-ui,sans-serif;
+  }
+  .suite > h2 .ms{margin-left:auto; color:var(--muted); font-weight:400; font-size:11.5px}
+  .rows{padding:4px 13px 10px}
+  .r{display:flex; gap:9px; padding:3px 0; align-items:baseline}
+  .r .mark{flex:none; width:42px; font-weight:700}
+  .pass .mark{color:var(--green)}
+  .fail .mark{color:var(--red)}
+  .info .mark{color:var(--blue)}
+  .r .nm{flex:1; min-width:0}
+  .r .dt{color:var(--muted); font-size:12px; text-align:right; max-width:46%}
+  .fail{background:rgba(255,82,82,.07)}
+  pre{
+    background:var(--panel); border:1px solid var(--line); border-radius:9px;
+    padding:14px; overflow:auto; font-size:12px; max-height:420px;
+  }
+  .note{
+    background:var(--panel-2); border-left:2px solid var(--orange);
+    padding:10px 13px; border-radius:0 7px 7px 0; color:var(--muted);
+    font-family:system-ui,sans-serif; font-size:12.5px; margin-bottom:16px;
+  }
+  a{color:var(--orange)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Hoop<span>Ref</span> test suite</h1>
+  <span class="sub">unit, integration, stress, regression, accuracy, performance, memory</span>
+  <button id="run">Run everything</button>
+  <button id="copy" class="ghost" disabled>Copy report JSON</button>
+  <a href="../" class="sub">back to the app</a>
+  <div id="tally"></div>
+</header>
+
+<div class="pad">
+  <div class="note">
+    These suites exercise the engine directly, with no camera and no models, so they run
+    deterministically and in seconds. They measure the rules and tracking layers given
+    input of a stated quality. They deliberately do not claim anything about how well
+    MediaPipe and COCO-SSD perform on your court, which needs labelled real footage.
+  </div>
+  <div id="out"></div>
+  <h2 style="font-family:system-ui,sans-serif;font-size:14px">Machine readable report</h2>
+  <pre id="json">Run the suite to generate the report.</pre>
+</div>
+
+<script type="module">
+import { runAll, suites } from './harness.js';
+import './unit.js';
+import './integration.js';
+import './stress.js';
+import './regression.js';
+import './accuracy.js';
+import './perf.js';
+import { accuracyResults } from './accuracy.js';
+import { benchResults } from './perf.js';
+
+const out = document.getElementById('out');
+const tally = document.getElementById('tally');
+
+function render(report){
+  out.innerHTML = '';
+  for (const s of report.suites){
+    const box = document.createElement('div');
+    box.className = 'suite';
+    const failed = s.results.filter(r => !r.pass && !r.info).length;
+    const passed = s.results.filter(r => r.pass && !r.info).length;
+    box.innerHTML =
+      '<h2>' + esc(s.name) +
+      '<span style="color:' + (failed ? 'var(--red)' : 'var(--green)') + '">' +
+      passed + '/' + (passed + failed) + '</span>' +
+      '<span class="ms">' + s.ms.toFixed(0) + ' ms</span></h2>';
+    const rows = document.createElement('div');
+    rows.className = 'rows';
+    for (const r of s.results){
+      const div = document.createElement('div');
+      div.className = 'r ' + (r.info ? 'info' : (r.pass ? 'pass' : 'fail'));
+      div.innerHTML =
+        '<span class="mark">' + (r.info ? 'NOTE' : (r.pass ? 'PASS' : 'FAIL')) + '</span>' +
+        '<span class="nm">' + esc(r.name) + '</span>' +
+        '<span class="dt">' + esc(r.detail || '') + '</span>';
+      rows.appendChild(div);
+    }
+    box.appendChild(rows);
+    out.appendChild(box);
+  }
+}
+
+function esc(s){
+  return String(s).replace(/[&<>]/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[ch]));
+}
+
+let lastReport = null;
+
+document.getElementById('run').addEventListener('click', async () => {
+  const btn = document.getElementById('run');
+  btn.disabled = true; btn.textContent = 'Running...';
+  tally.textContent = '';
+  out.innerHTML = '<div class="sub" style="padding:10px 0">Running suites...</div>';
+  await new Promise(r => setTimeout(r, 30));
+
+  const report = await runAll();
+  report.accuracy = accuracyResults;
+  report.performance = benchResults;
+  lastReport = report;
+
+  render(report);
+  tally.innerHTML = '<b style="color:' + (report.failed ? 'var(--red)' : 'var(--green)') + '">' +
+    report.passed + ' passed, ' + report.failed + ' failed</b> in ' + report.ms + ' ms';
+  document.getElementById('json').textContent = JSON.stringify({
+    passed: report.passed, failed: report.failed, ms: report.ms,
+    accuracy: report.accuracy, performance: report.performance,
+    failures: report.suites.flatMap(s =>
+      s.results.filter(r => !r.pass && !r.info).map(r => s.name + ': ' + r.name + ' [' + r.detail + ']'))
+  }, null, 2);
+  document.getElementById('copy').disabled = false;
+  btn.disabled = false; btn.textContent = 'Run everything';
+  window.__report = report;
+});
+
+document.getElementById('copy').addEventListener('click', () => {
+  navigator.clipboard.writeText(document.getElementById('json').textContent);
+});
+
+window.__runTests = async () => {
+  const report = await runAll();
+  report.accuracy = accuracyResults;
+  report.performance = benchResults;
+  return report;
+};
+</script>
+</body>
+</html>
